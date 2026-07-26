@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Search and parse
+      - name: Search
         run: python3 search.py
         env:
           ENGINE: ${{ inputs.engine }}
@@ -37,9 +37,10 @@ jobs:
           path: |
             results.json
             results_summary.md
+            search_results.html
           retention-days: 1
 
-      - name: Job summary
+      - name: Summary
         run: |
           echo "## Search Results" >> $GITHUB_STEP_SUMMARY
-          cat results_summary.md >> $GITHUB_STEP_SUMMARY || echo "No results" >> $GITHUB_STEP_SUMMARY
+          cat results_summary.md >> $GITHUB_STEP_SUMMARY
