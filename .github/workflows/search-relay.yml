@@ -1,26 +1,19 @@
 name: Search Relay
-
 on:
   workflow_dispatch:
     inputs:
       query:
-        description: 'Search query'
+        description: Search query
         required: true
         type: string
       engine:
-        description: 'Search engine'
+        description: Search engine
         required: true
         type: choice
-        options:
-          - google
-          - duckduckgo
-          - brave
-          - qwant
-          - startpage
+        options: [google, duckduckgo, brave, qwant, startpage]
         default: google
       count:
-        description: 'Results count'
-        required: false
+        description: Results count
         type: number
         default: 10
 
@@ -28,101 +21,38 @@ jobs:
   search:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine search URL
-        id: url
-        run: |
-          QUERY="${{ inputs.query }}"
-          case "${{ inputs.engine }}" in
-            google)
-              echo "url=https://www.google.com/search?q=${QUERY}&num=${{ inputs.count }}" >> $GITHUB_OUTPUT
-              ;;
-            duckduckgo)
-              echo "url=https://html.duckduckgo.com/html/?q=${QUERY}" >> $GITHUB_OUTPUT
-              ;;
-            brave)
-              echo "url=https://search.brave.com/search?q=${QUERY}" >> $GITHUB_OUTPUT
-              ;;
-            qwant)
-              echo "url=https://www.qwant.com/?q=${QUERY}" >> $GITHUB_OUTPUT
-              ;;
-            startpage)
-              echo "url=https://www.startpage.com/sp/search?query=${QUERY}" >> $GITHUB_OUTPUT
-              ;;
-          esac
+      - uses: actions/checkout@v4
 
-      - name: Fetch search results
+      - name: Fetch results
         run: |
-          URL="${{ steps.url.outputs.url }}"
+          Q="${{ inputs.query }}"
+          case "${{ inputs.engine }}" in
+            google)     URL="https://www.google.com/search?q=${Q}&num=${{ inputs.count }}" ;;
+            duckduckgo) URL="https://html.duckduckgo.com/html/?q=${Q}" ;;
+            brave)      URL="https://search.brave.com/search?q=${Q}" ;;
+            qwant)      URL="https://www.qwant.com/?q=${Q}" ;;
+            startpage)  URL="https://www.startpage.com/sp/search?query=${Q}" ;;
+          esac
           echo "Fetching: $URL"
-          curl -sL "$URL" \
-            -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36" \
-            -H "Accept: text/html,application/xhtml+xml" \
-            -H "Accept-Language: en-US,en;q=0.9" \
-            -o search_results.html
+          curl -sL "$URL" -o search_results.html \
+            -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) Chrome/130.0.0.0'
           echo "Size: $(wc -c < search_results.html) bytes"
 
-      - name: Parse and save summary
-        run: |
-          ENGINE="${{ inputs.engine }}"
-          QUERY="${{ inputs.query }}"
-          COUNT=${{ inputs.count }}
-          python3 << 'PYEOF'
-import os, re, json
-
-ENGINE = os.environ.get('ENGINE', 'google')
-QUERY = os.environ.get('QUERY', '')
-COUNT = int(os.environ.get('COUNT', '10'))
-
-with open('search_results.html', 'r', encoding='utf-8', errors='replace') as f:
-    html = f.read()
-
-results = []
-seen = set()
-
-# Extract all links
-for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
-    url = m.group(1)
-    title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-    domain = url.split('/')[2] if '//' in url else ''
-    skip = ['google.com/search', 'accounts.google', 'duckduckgo.com', 'brave.com', 'qwant.com', 'startpage.com']
-    if url not in seen and title and len(title) > 3 and not any(x in url for x in skip):
-        if not any(x in domain for x in ['google.', 'duckduckgo.', 'brave.', 'qwant.', 'startpage.']):
-            seen.add(url)
-            results.append({'title': title, 'url': url})
-
-results = results[:COUNT]
-
-# Save results as JSON
-with open('results.json', 'w', encoding='utf-8') as f:
-    json.dump({'engine': ENGINE, 'query': QUERY, 'count': len(results), 'results': results}, f, ensure_ascii=False, indent=2)
-
-# Save text summary
-with open('results_summary.md', 'w', encoding='utf-8') as f:
-    f.write(f'# Search Results: {ENGINE} for "{QUERY}"\n\n')
-    for i, r in enumerate(results, 1):
-        f.write(f'{i}. {r["title"]}\n')
-        f.write(f'   {r["url"]}\n\n')
-
-print(f'Extracted {len(results)} results')
-PYEOF
+      - name: Parse results
+        run: python3 parse_results.py
         env:
-          ENGINE: "${{ inputs.engine }}"
-          QUERY: "${{ inputs.query }}"
+          ENGINE: ${{ inputs.engine }}
+          QUERY: ${{ inputs.query }}
           COUNT: ${{ inputs.count }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: search-results
-          path: |
-            search_results.html
-            results.json
-            results_summary.md
+          path: results.*
           retention-days: 1
 
       - name: Job summary
         run: |
           echo "## Search Results" >> $GITHUB_STEP_SUMMARY
-          echo "Engine: **${{ inputs.engine }}** | Query: **${{ inputs.query }}**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           cat results_summary.md >> $GITHUB_STEP_SUMMARY
