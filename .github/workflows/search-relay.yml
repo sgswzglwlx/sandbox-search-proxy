@@ -17,7 +17,7 @@ on:
           - brave
           - qwant
           - startpage
-        default: 'google'
+        default: google
       count:
         description: 'Results count'
         required: false
@@ -28,143 +28,101 @@ jobs:
   search:
     runs-on: ubuntu-latest
     steps:
-      - name: Execute search
+      - name: Determine search URL
+        id: url
         run: |
           QUERY="${{ inputs.query }}"
-          ENGINE="${{ inputs.engine }}"
-          COUNT=${{ inputs.count }}
-          
-          # Build search URL based on engine
-          case $ENGINE in
+          case "${{ inputs.engine }}" in
             google)
-              URL="https://www.google.com/search?q=${QUERY}&num=${COUNT}"
+              echo "url=https://www.google.com/search?q=${QUERY}&num=${{ inputs.count }}" >> $GITHUB_OUTPUT
               ;;
             duckduckgo)
-              URL="https://html.duckduckgo.com/html/?q=${QUERY}"
+              echo "url=https://html.duckduckgo.com/html/?q=${QUERY}" >> $GITHUB_OUTPUT
               ;;
             brave)
-              URL="https://search.brave.com/search?q=${QUERY}"
+              echo "url=https://search.brave.com/search?q=${QUERY}" >> $GITHUB_OUTPUT
               ;;
             qwant)
-              URL="https://www.qwant.com/?q=${QUERY}"
+              echo "url=https://www.qwant.com/?q=${QUERY}" >> $GITHUB_OUTPUT
               ;;
             startpage)
-              URL="https://www.startpage.com/sp/search?query=${QUERY}"
+              echo "url=https://www.startpage.com/sp/search?query=${QUERY}" >> $GITHUB_OUTPUT
               ;;
           esac
-          
-          echo "Searching: $ENGINE for: $QUERY"
-          echo "URL: $URL"
-          
-          # Fetch results
+
+      - name: Fetch search results
+        run: |
+          URL="${{ steps.url.outputs.url }}"
+          echo "Fetching: $URL"
           curl -sL "$URL" \
             -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36" \
             -H "Accept: text/html,application/xhtml+xml" \
-            -H "Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7" \
+            -H "Accept-Language: en-US,en;q=0.9" \
             -o search_results.html
-          
-          echo "Results saved. Size: $(wc -c < search_results.html) bytes"
-          
-          # Extract links and titles (rough extraction)
+          echo "Size: $(wc -c < search_results.html) bytes"
+
+      - name: Parse and save summary
+        run: |
+          ENGINE="${{ inputs.engine }}"
+          QUERY="${{ inputs.query }}"
+          COUNT=${{ inputs.count }}
           python3 << 'PYEOF'
-import re, json
+import os, re, json
+
+ENGINE = os.environ.get('ENGINE', 'google')
+QUERY = os.environ.get('QUERY', '')
+COUNT = int(os.environ.get('COUNT', '10'))
 
 with open('search_results.html', 'r', encoding='utf-8', errors='replace') as f:
     html = f.read()
 
 results = []
-seen_urls = set()
-
-# Google specific
-if "${{ inputs.engine }}" == "google":
-    for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I):
-        url = m.group(1)
-        title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-        if url not in seen_urls and title and not any(x in url for x in ['google.com/search', 'accounts.google']):
-            seen_urls.add(url)
-            results.append({'title': title, 'url': url})
-
-# DuckDuckGo specific
-elif "${{ inputs.engine }}" == "duckduckgo":
-    for m in re.finditer(r'<a[^>]*rel\s*=\s*["\']nofollow["\'][^>]*class\s*=\s*["\']result__a["\'][^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
-        url = m.group(1)
-        title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-        if url not in seen_urls and title:
-            seen_urls.add(url)
-            results.append({'title': title, 'url': url})
-    if not results:
-        # fallback: extract all links
-        for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I):
-            url = m.group(1)
-            title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-            if url not in seen_urls and title and 'duckduckgo.com' not in url:
-                seen_urls.add(url)
-                results.append({'title': title, 'url': url})
-
-# Generic fallback
-else:
-    for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I):
-        url = m.group(1)
-        title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-        domain = url.split('/')[2] if '//' in url else ''
-        if url not in seen_urls and title and ENGINE not in domain:
-            seen_urls.add(url)
-            results.append({'title': title, 'url': url})
-
-# Output as JSON
-print(json.dumps({
-    'engine': "${{ inputs.engine }}",
-    'query': "${{ inputs.query }}",
-    'count': len(results),
-    'results': results[:${{ inputs.count }}],
-    'html_size': $(wc -c < search_results.html)
-}, ensure_ascii=False, indent=2))
-PYEOF
-          
-          # Save results to a summary file for easier reading
-          python3 << 'PYEOF'
-import json
-
-with open('search_results.html', 'r', encoding='utf-8', errors='replace') as f:
-    html = f.read()
-
-# Save a clean text summary
-lines = []
-lines.append(f"# Search Results: ${{{{ inputs.engine }}}} for \"${{{{ inputs.query }}}}\"\n")
-
-import re
 seen = set()
-# Extract all meaningful links
-for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I):
+
+# Extract all links
+for m in re.finditer(r'<a[^>]*href\s*=\s*["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
     url = m.group(1)
     title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
     domain = url.split('/')[2] if '//' in url else ''
-    if url not in seen and title and len(title) > 3 and not any(
-        x in domain for x in ['google.', 'duckduckgo.', 'brave.', 'qwant.', 'startpage.']
-    ):
-        seen.add(url)
-        lines.append(f"- {title}")
-        lines.append(f"  {url}")
-        lines.append("")
+    skip = ['google.com/search', 'accounts.google', 'duckduckgo.com', 'brave.com', 'qwant.com', 'startpage.com']
+    if url not in seen and title and len(title) > 3 and not any(x in url for x in skip):
+        if not any(x in domain for x in ['google.', 'duckduckgo.', 'brave.', 'qwant.', 'startpage.']):
+            seen.add(url)
+            results.append({'title': title, 'url': url})
 
-with open('results_summary.md', 'w') as f:
-    f.write('\n'.join(lines[:60]))
+results = results[:COUNT]
 
-print(f"Summary: {len(lines)//3} results extracted")
+# Save results as JSON
+with open('results.json', 'w', encoding='utf-8') as f:
+    json.dump({'engine': ENGINE, 'query': QUERY, 'count': len(results), 'results': results}, f, ensure_ascii=False, indent=2)
+
+# Save text summary
+with open('results_summary.md', 'w', encoding='utf-8') as f:
+    f.write(f'# Search Results: {ENGINE} for "{QUERY}"\n\n')
+    for i, r in enumerate(results, 1):
+        f.write(f'{i}. {r["title"]}\n')
+        f.write(f'   {r["url"]}\n\n')
+
+print(f'Extracted {len(results)} results')
 PYEOF
+        env:
+          ENGINE: "${{ inputs.engine }}"
+          QUERY: "${{ inputs.query }}"
+          COUNT: ${{ inputs.count }}
 
-      - name: Upload search results
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: search-results
           path: |
             search_results.html
+            results.json
             results_summary.md
           retention-days: 1
 
-      - name: Output summary
+      - name: Job summary
         run: |
           echo "## Search Results" >> $GITHUB_STEP_SUMMARY
           echo "Engine: **${{ inputs.engine }}** | Query: **${{ inputs.query }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          cat results_summary.md >> $GITHUB_STEP_SUMMARY || echo "No summary" >> $GITHUB_STEP_SUMMARY
+          cat results_summary.md >> $GITHUB_STEP_SUMMARY
