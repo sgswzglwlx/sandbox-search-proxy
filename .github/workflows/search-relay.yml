@@ -11,7 +11,7 @@ on:
         required: true
         type: choice
         options: [google, duckduckgo, brave, qwant, startpage]
-        default: google
+        default: duckduckgo
       count:
         description: Results count
         type: number
@@ -23,30 +23,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch results
-        run: |
-          # URL-encode query using jq
-          ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${{ inputs.query }}'))")
-          ENGINE="${{ inputs.engine }}"
-          COUNT=${{ inputs.count }}
-
-          case $ENGINE in
-            google)     URL="https://www.google.com/search?q=${ENCODED}&num=${COUNT}" ;;
-            duckduckgo) URL="https://html.duckduckgo.com/html/?q=${ENCODED}" ;;
-            brave)      URL="https://search.brave.com/search?q=${ENCODED}" ;;
-            qwant)      URL="https://www.qwant.com/?q=${ENCODED}" ;;
-            startpage)  URL="https://www.startpage.com/sp/search?query=${ENCODED}" ;;
-          esac
-
-          echo "Fetching: $URL"
-          curl -sL "$URL" -o search_results.html \
-            -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) Chrome/130.0.0.0 Safari/537.36' \
-            -H 'Accept: text/html,application/xhtml+xml'
-          echo "Exit code: $?"
-          echo "Size: $(wc -c < search_results.html) bytes"
-
-      - name: Parse results
-        run: python3 parse_results.py
+      - name: Search and parse
+        run: python3 search.py
         env:
           ENGINE: ${{ inputs.engine }}
           QUERY: ${{ inputs.query }}
@@ -56,10 +34,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: search-results
-          path: results.*
+          path: |
+            results.json
+            results_summary.md
           retention-days: 1
 
       - name: Job summary
         run: |
           echo "## Search Results" >> $GITHUB_STEP_SUMMARY
-          cat results_summary.md >> $GITHUB_STEP_SUMMARY
+          cat results_summary.md >> $GITHUB_STEP_SUMMARY || echo "No results" >> $GITHUB_STEP_SUMMARY
